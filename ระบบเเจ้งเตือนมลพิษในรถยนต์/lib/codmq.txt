@@ -1,0 +1,5 @@
+//-------------CODE MQ-7
+ค้นหาจาก : https://www.teachmemicro.com/use-mq-7-carbon-monoxide-sensor/
+
+//-------------code MQ-6
+ค้นหาจาก :  https://www.teachmemicro.com/lpg-sensor-mq-6-arduino/
