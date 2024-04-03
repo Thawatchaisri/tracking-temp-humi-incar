@@ -510,3 +510,206 @@ void recon(){
   if (!iSYNC.mqConnected())connectMQTT();
   iSYNC.mqLoop();
   }
+
+
+     /** 
+     
+     #include <FS.h>
+#include <SPIFFS.h>
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <iSYNC.h>
+#include <WebServer.h>
+#include <WiFiManager.h>
+#include <ArduinoJson.h>
+#include "SparkFun_SGP30_Arduino_Library.h"
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include "SimpleTimer.h"
+#include <TridentTD_LineNotify.h>
+
+WiFiClient client;
+iSYNC iSYNC(client);
+
+String iSYNC_USERNAME = "stanutty1123";
+String iSYNC_KEY = "5fb2aa195e614c07a2d8a206";
+String iSYNC_AUTH = "5fb2aa015e614c07a2d8a204";
+
+const int LedblynkGreen = 19;
+const int LedblynkRed = 18;
+const int AP_Config = 5;
+#define buzzer 23
+
+LiquidCrystal_I2C lcd(0x3F, 20, 4);
+SGP30 mySensor;
+SimpleTimer timer;
+
+char line_token1[45] = "";
+char line_token2[45] = "";
+char line_token3[45] = "";
+
+float ppm;
+float NUTLPG_PPM;
+
+void saveConfigCallback() {
+  shouldSaveConfig = true;
+}
+
+void connectMQTT() {
+  while (!iSYNC.mqConnect()) {
+    delay(3000);
+  }
+  iSYNC.mqPub(iSYNC_KEY, "พร้อมรับคำสั่งแล้วจ๊ะพี่จ๋า"); 
+  iSYNC.mqSub(iSYNC_KEY);
+}
+
+void setup() {
+  pinMode(buzzer, OUTPUT);
+  pinMode(LedblynkGreen, OUTPUT);
+  pinMode(LedblynkRed, OUTPUT);
+  pinMode(AP_Config, INPUT_PULLUP);
+
+  digitalWrite(LedblynkRed, LOW);
+  digitalWrite(LedblynkGreen, LOW);
+  digitalWrite(buzzer, HIGH);
+
+  Serial.begin(115200);
+
+  timer.setInterval(3000, NutreadSensor);
+  timer.setInterval(360000, toline);
+  timer.setInterval(1000, recon);
+  timer.setInterval(1000, calco);
+  timer.setInterval(1000, callpg);
+
+  lcd.begin();
+  lcd.backlight();
+  Wire.begin();
+
+  if (SPIFFS.begin(true)) {
+    if (SPIFFS.exists("/config.json")) {
+      File configFile = SPIFFS.open("/config.json", "r");
+      if (configFile) {
+        size_t size = configFile.size();
+        std::unique_ptr<char[]> buf(new char[size]);
+
+        configFile.readBytes(buf.get(), size);
+        DynamicJsonDocument jsonBuffer(1024);
+        DeserializationError error = deserializeJson(jsonBuffer, buf.get());
+        if (!error) {
+          strcpy(line_token1, jsonBuffer["line_token1"]);
+          strcpy(line_token2, jsonBuffer["line_token2"]);
+          strcpy(line_token3, jsonBuffer["line_token3"]);
+        } else {
+          Serial.println("failed to load json config");
+        }
+      }
+    }
+  } else {
+    Serial.println("failed to mount FS");
+  }
+
+  WiFiManagerParameter custom_line_token1("line_token1", "line_token1", line_token1, 45);
+  WiFiManagerParameter custom_line_token2("line_token2", "line_token2", line_token2, 45);
+  WiFiManagerParameter custom_line_token3("line_token3", "line_token3", line_token3, 45);
+
+  WiFiManager wifiManager;
+
+  wifiManager.setSaveConfigCallback(saveConfigCallback);
+
+  wifiManager.addParameter(&custom_line_token1);
+  wifiManager.addParameter(&custom_line_token2);
+  wifiManager.addParameter(&custom_line_token3);
+
+  wifiManager.autoConnect("AutoConnectAP");
+
+  strcpy(line_token1, custom_line_token1.getValue());
+  strcpy(line_token2, custom_line_token2.getValue());
+  strcpy(line_token3, custom_line_token3.getValue());
+
+  if (shouldSaveConfig) {
+    DynamicJsonDocument jsonBuffer(1024);
+    jsonBuffer["line_token1"] = line_token1;
+    jsonBuffer["line_token2"] = line_token2;
+    jsonBuffer["line_token3"] = line_token3;
+
+    File configFile = SPIFFS.open("/config.json", "w");
+    if (configFile) {
+      serializeJson(jsonBuffer, configFile);
+      configFile.close();
+    } else {
+      Serial.println("failed to open config file for writing");
+    }
+  }
+
+  connectMQTT();
+
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Connect to MQTT");
+}
+
+void loop() {
+  timer.run();
+}
+
+void recon() {
+  if (digitalRead(AP_Config) == LOW) {
+    WiFi.disconnect(true);
+    delay(1000);
+    digitalWrite(LedblynkGreen, LOW);
+    digitalWrite(LedblynkRed, HIGH);
+    digitalWrite(buzzer, HIGH);
+    ESP.restart();
+  }
+}
+
+void toline() {
+  iSYNC.mqPub(iSYNC_KEY, "รีบุ๊คตัวเองทันที"); 
+}
+
+void calco() {
+  if (isnan(ppm)) {
+    lcd.setCursor(0, 0);
+    lcd.print("CO Err");
+  } else if (ppm <= 30) {
+    lcd.setCursor(0, 0);
+    lcd.print("CO ปลอดภัย ปริมาณ " + String(ppm) + " ppm ");
+  } else if (ppm > 30) {
+    lcd.setCursor(0, 0);
+    lcd.print("CO แจ้งเตือน ปริมาณ " + String(ppm) + " ppm ");
+    tone(buzzer, 4000, 500);
+  }
+}
+
+void callpg() {
+  if (isnan(NUTLPG_PPM)) {
+    lcd.setCursor(0, 1);
+    lcd.print("LPG Err");
+  } else if (NUTLPG_PPM <= 500) {
+    lcd.setCursor(0, 1);
+    lcd.print("LPG ปลอดภัย ปริมาณ " + String(NUTLPG_PPM) + " ppb ");
+  } else if (NUTLPG_PPM > 500) {
+    lcd.setCursor(0, 1);
+    lcd.print("LPG แจ้งเตือน ปริมาณ " + String(NUTLPG_PPM) + " ppb ");
+    tone(buzzer, 4000, 500);
+  }
+}
+
+void NutreadSensor() {
+  ppm = mySensor.getCO2();
+
+  if (isnan(ppm)) {
+    lcd.setCursor(0, 2);
+    lcd.print("CO2 Err");
+  } else if (ppm <= 1500) {
+    lcd.setCursor(0, 2);
+    lcd.print("CO2 ปลอดภัย ปริมาณ " + String(ppm) + " ppm ");
+  } else if (ppm > 1500) {
+    lcd.setCursor(0, 2);
+    lcd.print("CO2 แจ้งเตือน ปริมาณ " + String(ppm) + " ppm ");
+    tone(buzzer, 4000, 500);
+  }
+}
+
+     
+     */
